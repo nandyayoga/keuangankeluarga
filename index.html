@@ -9,23 +9,24 @@
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-  
   <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
-
   <style>
     body { margin: 0; background: #f9fafb; }
     ::-webkit-scrollbar { height: 4px; width: 4px; }
     ::-webkit-scrollbar-track { background: #f1f1f1; }
     ::-webkit-scrollbar-thumb { background: #aaa; border-radius: 4px; }
+    @media print {
+      .no-print { display: none !important; }
+      body { background: white; }
+      .print-area { padding: 0; }
+      table { font-size: 10px; }
+    }
   </style>
 </head>
 <body>
   <div id="root"></div>
-
   <script type="text/babel">
-    // --- KONFIGURASI FIREBASE ---
-    // GANTI seluruh isi di bawah ini dengan yang Anda salin dari Firebase Console!
     const firebaseConfig = {
       apiKey: "AIzaSyCGu27iPkpJ5_l0-_vaxUy1EpCofLzT1yg",
       authDomain: "keuangan-keluarga-bfedc.firebaseapp.com",
@@ -35,8 +36,6 @@
       messagingSenderId: "1089257207734",
       appId: "1:1089257207734:web:60d64302720dff0b703317"
     };
-
-    // Inisialisasi Firebase
     firebase.initializeApp(firebaseConfig);
     const db = firebase.database();
 
@@ -57,6 +56,46 @@
     const EMPTY_FORM = {date:"",desc:"",category:"Belanja Rumah Tangga",type:"expense",amount:"",pic:"Bersama",note:""};
     const getTypeFromCat = (cat) => INCOME_CATS.includes(cat)?"income":TRANSFER_CATS.includes(cat)?"transfer":"expense";
 
+    const PIN = "271220"; // Ganti PIN di sini
+
+    function LockScreen({onUnlock}) {
+      const [digits, setDigits] = React.useState(["","","","","",""]);
+      const [err, setErr] = React.useState(false);
+      const [shake, setShake] = React.useState(false);
+      const refs = Array.from({length:6}, ()=>React.useRef());
+      const handleKey=(i,val)=>{
+        if(!/^\d?$/.test(val)) return;
+        const d=[...digits]; d[i]=val; setDigits(d); setErr(false);
+        if(val && i<5) refs[i+1].current.focus();
+        if(d.every(x=>x!=="")){
+          const pin=d.join("");
+          if(pin===PIN){ onUnlock(); }
+          else{ setShake(true); setErr(true); setTimeout(()=>{ setShake(false); setDigits(["","","","","",""]); refs[0].current.focus(); },600); }
+        }
+      };
+      const handleKeyDown=(i,e)=>{ if(e.key==="Backspace"&&!digits[i]&&i>0){ refs[i-1].current.focus(); } };
+      return(
+        <div className="min-h-screen bg-gradient-to-br from-green-50 to-emerald-100 flex items-center justify-center px-4">
+          <div className="bg-white rounded-2xl shadow-xl p-8 w-full max-w-sm text-center">
+            <div className="text-5xl mb-4">🔒</div>
+            <h1 className="text-xl font-bold text-gray-800 mb-1">KEUANGAN KELUARGA</h1>
+            <p className="text-sm text-gray-500 mb-6">Masukkan PIN 6 angka untuk masuk</p>
+            <div className={`flex gap-2 justify-center mb-4 ${shake?"animate-bounce":""}`}>
+              {digits.map((d,i)=>(
+                <input key={i} ref={refs[i]} type="password" inputMode="numeric" maxLength={1} value={d}
+                  onChange={e=>handleKey(i,e.target.value)}
+                  onKeyDown={e=>handleKeyDown(i,e)}
+                  className={`w-11 h-12 text-center text-xl font-bold border-2 rounded-xl focus:outline-none transition-all
+                    ${err?"border-red-400 bg-red-50":d?"border-green-500 bg-green-50":"border-gray-300 focus:border-green-500"}`}/>
+              ))}
+            </div>
+            {err&&<p className="text-red-500 text-sm font-semibold">PIN salah, coba lagi</p>}
+            <p className="text-xs text-gray-400 mt-4">☁️ Data tersinkron secara real-time</p>
+          </div>
+        </div>
+      );
+    }
+
     const DEFAULT_ESTIMATES = {
       "Cicilan Rumah":6360880,"Tabungan":0,"Beban Bulanan":2463450,
       "Belanja Rumah Tangga":4815811,"Nafkah Istri":1200000,"Biaya Entertainment":800000,
@@ -74,6 +113,13 @@
       return mob;
     }
 
+    function Root() {
+      const [unlocked, setUnlocked] = React.useState(()=>sessionStorage.getItem("kk_auth")==="1");
+      const handleUnlock=()=>{ sessionStorage.setItem("kk_auth","1"); setUnlocked(true); };
+      if(!unlocked) return <LockScreen onUnlock={handleUnlock}/>;
+      return <App/>;
+    }
+
     function App() {
       const isMobile = useIsMobile();
       const [entries, setEntries] = useState([]);
@@ -83,15 +129,15 @@
       const [showForm, setShowForm] = useState(false);
       const [filterPIC, setFilterPIC] = useState("Semua");
       const [filterCat, setFilterCat] = useState("Semua");
+      const [dateFrom, setDateFrom] = useState("");
+      const [dateTo, setDateTo] = useState("");
       const [activeTab, setActiveTab] = useState("main");
       const [editingEst, setEditingEst] = useState(null);
       const [isLoading, setIsLoading] = useState(true);
 
-      // Sinkronisasi data dari Firebase secara Real-time
       useEffect(() => {
         const entriesRef = db.ref("entries");
         const estimatesRef = db.ref("estimates");
-
         entriesRef.on("value", (snapshot) => {
           const val = snapshot.val();
           if (val) {
@@ -102,20 +148,20 @@
           }
           setIsLoading(false);
         });
-
         estimatesRef.on("value", (snapshot) => {
           const val = snapshot.val();
           if (val) setEstimates(val);
         });
-
-        return () => {
-          entriesRef.off();
-          estimatesRef.off();
-        };
+        return () => { entriesRef.off(); estimatesRef.off(); };
       }, []);
 
       const sorted = useMemo(()=>[...entries].sort((a,b)=>a.date.localeCompare(b.date)),[entries]);
-      const filtered = useMemo(()=>sorted.filter(e=>(filterPIC==="Semua"||e.pic===filterPIC)&&(filterCat==="Semua"||e.category===filterCat)),[sorted,filterPIC,filterCat]);
+      const filtered = useMemo(()=>sorted.filter(e=>
+        (filterPIC==="Semua"||e.pic===filterPIC)&&
+        (filterCat==="Semua"||e.category===filterCat)&&
+        (!dateFrom||e.date>=dateFrom)&&
+        (!dateTo||e.date<=dateTo)
+      ),[sorted,filterPIC,filterCat,dateFrom,dateTo]);
       const runBalance = useMemo(()=>{ let bal=0; return filtered.map(e=>{ if(e.type==="income")bal+=e.amount; else bal-=e.amount; return {...e,running:bal}; }); },[filtered]);
 
       const suamiEntries = useMemo(()=>sorted.filter(e=>e.category==="Pindah Ke Suami"||(e.pic==="Suami"&&e.type==="expense")),[sorted]);
@@ -134,30 +180,67 @@
       const catTotals = useMemo(()=>{ const m={}; entries.filter(e=>e.type==="expense").forEach(e=>{m[e.category]=(m[e.category]||0)+e.amount;}); return m; },[entries]);
 
       const handleCatChange=(cat)=>{ const type=getTypeFromCat(cat); const pic=cat==="Pindah Ke Suami"?"Suami":cat==="Pindah Ke Istri"?"Istri":form.pic; setForm(f=>({...f,category:cat,type,pic})); };
-      
-      const handleSave=()=>{ 
-        if(!form.date||!form.desc||!form.amount)return alert("Isi tanggal, deskripsi, dan nominal!"); 
-        const entry={...form,amount:toNum(form.amount),type:getTypeFromCat(form.category), id: Date.now()}; 
-        
-        if(editId!==null){
-          db.ref("entries/" + editId).update(entry);
-          setEditId(null);
-        } else {
-          db.ref("entries").push(entry);
-        } 
-        setForm(EMPTY_FORM);setShowForm(false); 
+
+      const handleSave=()=>{
+        if(!form.date||!form.desc||!form.amount)return alert("Isi tanggal, deskripsi, dan nominal!");
+        const entry={...form,amount:toNum(form.amount),type:getTypeFromCat(form.category),id:Date.now()};
+        if(editId!==null){ db.ref("entries/"+editId).update(entry); setEditId(null); }
+        else { db.ref("entries").push(entry); }
+        setForm(EMPTY_FORM); setShowForm(false);
       };
 
       const handleEdit=(e)=>{setForm({...e,amount:String(e.amount)});setEditId(e.firebaseId);setShowForm(true);setActiveTab("main");};
-      const handleDelete=(id)=>{if(confirm("Hapus entri ini?")) db.ref("entries/" + id).remove();};
+      const handleDelete=(id)=>{if(confirm("Hapus entri ini?")) db.ref("entries/"+id).remove();};
       const clearAll=()=>{if(confirm("Hapus semua data secara permanen?")){ db.ref("entries").remove(); }};
+      const updateEstimate=(cat,val)=>{ db.ref("estimates/"+cat).set(toNum(val)); setEditingEst(null); };
 
-      const updateEstimate=(cat, val)=>{
-        db.ref("estimates/" + cat).set(toNum(val));
-        setEditingEst(null);
+      const handlePrint=()=>{
+        const label = dateFrom||dateTo ? `Periode: ${dateFrom||"awal"} s/d ${dateTo||"sekarang"}` : "Semua Periode";
+        const rows = runBalance.map((e,i)=>{
+          const isT=e.type==="transfer",isI=e.type==="income";
+          return `<tr style="background:${i%2===0?"#fff":"#f9fafb"}">
+            <td style="border:1px solid #ddd;padding:4px 6px;text-align:center">${i+1}</td>
+            <td style="border:1px solid #ddd;padding:4px 6px">${e.date}</td>
+            <td style="border:1px solid #ddd;padding:4px 6px">${e.category}</td>
+            <td style="border:1px solid #ddd;padding:4px 6px">${e.desc}</td>
+            <td style="border:1px solid #ddd;padding:4px 6px;text-align:right;color:#15803d">${isI?fmt(e.amount):""}</td>
+            <td style="border:1px solid #ddd;padding:4px 6px;text-align:right;color:#dc2626">${!isI&&!isT?fmt(e.amount):""}</td>
+            <td style="border:1px solid #ddd;padding:4px 6px;text-align:right;color:#7c3aed">${isT?fmt(e.amount):""}</td>
+            <td style="border:1px solid #ddd;padding:4px 6px;text-align:right;font-weight:600;color:${e.running>=0?"#1d4ed8":"#dc2626"}">${fmt(e.running)}</td>
+            <td style="border:1px solid #ddd;padding:4px 6px">${e.pic||""}</td>
+            <td style="border:1px solid #ddd;padding:4px 6px;color:#888">${e.note||""}</td>
+          </tr>`;
+        }).join("");
+        const w=window.open("","_blank");
+        w.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"/>
+          <title>Laporan Keuangan Keluarga</title>
+          <style>body{font-family:system-ui,sans-serif;padding:24px;font-size:11px}
+          h2{margin:0 0 4px}p{margin:0 0 16px;color:#666}
+          table{width:100%;border-collapse:collapse}
+          th{background:#2d7d46;color:white;padding:5px 6px;text-align:left;border:1px solid #aaa}
+          tfoot td{background:#1a5c32;color:white;font-weight:bold;padding:5px 6px;border:1px solid #aaa}
+          @media print{@page{margin:1cm}}</style></head><body>
+          <h2>💰 LAPORAN KEUANGAN KELUARGA</h2>
+          <p>${label} &nbsp;|&nbsp; Dicetak: ${new Date().toLocaleString("id-ID")}</p>
+          <table><thead><tr>
+            <th>#</th><th>Tanggal</th><th>Kategori</th><th>Deskripsi</th>
+            <th style="text-align:right">Kredit</th><th style="text-align:right">Debit</th>
+            <th style="text-align:right">Transfer</th><th style="text-align:right">Saldo</th>
+            <th>PIC</th><th>Keterangan</th>
+          </tr></thead><tbody>${rows}</tbody>
+          <tfoot><tr>
+            <td colspan="4">TOTAL</td>
+            <td style="text-align:right">${fmt(totalIncome)}</td>
+            <td style="text-align:right">${fmt(totalExpense)}</td>
+            <td style="text-align:right">${fmt(totalTransfer)}</td>
+            <td style="text-align:right">${fmt(balance)}</td>
+            <td colspan="2"></td>
+          </tr></tfoot></table>
+          <script>window.onload=()=>{window.print();}<\/script></body></html>`);
+        w.document.close();
       };
 
-      const exportCSV=()=>{
+      const handleLogout=()=>{ sessionStorage.removeItem("kk_auth"); window.location.reload(); };
         if(!entries.length)return alert("Belum ada data.");
         const h=["ID","Tanggal","Kategori","Deskripsi","Tipe","Nominal","PIC","Keterangan"];
         const rows=entries.map(e=>[e.id,e.date,e.category,e.desc,e.type,e.amount,e.pic,e.note]);
@@ -171,7 +254,7 @@
         const X=window.XLSX; if(!X){alert("Library Excel gagal dimuat.");return;}
         const wb=X.utils.book_new();
         const mainData=[
-          ["ID","Tanggal","Kategori","Deskripsi","Tipe","Kredit","Debit","Transfer","Saldo","PIC","Keterangan"],
+          ["ID","Tanggal","Kategori","Deskripsi","Tipe","Kredit (Masuk)","Debit (Keluar)","Transfer","Saldo","PIC","Keterangan"],
           ...runBalance.map(e=>[e.id,e.date,e.category,e.desc,
             e.type==="income"?"Pemasukan":e.type==="transfer"?"Transfer":"Pengeluaran",
             e.type==="income"?e.amount:"",e.type==="expense"?e.amount:"",e.type==="transfer"?e.amount:"",
@@ -182,30 +265,40 @@
         ws1["!cols"]=[{wch:6},{wch:12},{wch:22},{wch:30},{wch:12},{wch:16},{wch:16},{wch:14},{wch:16},{wch:10},{wch:20}];
         X.utils.book_append_sheet(wb,ws1,"Semua Transaksi");
 
-        const totalEst=EXPENSE_CATS.reduce((s,c)=>s+(estimates[c]||0),0);
-        const totalReal=EXPENSE_CATS.reduce((s,c)=>s+(catTotals[c]||0),0);
+        const suamiData=[
+          ["No","Tanggal","Kategori","Deskripsi","Dana Masuk","Pengeluaran","Saldo Kas","Keterangan"],
+          ...suamiLedger.map((e,i)=>{ const isIn=e.category==="Pindah Ke Suami"; return[i+1,e.date,e.category,e.desc,isIn?e.amount:"",!isIn?e.amount:"",e.running,e.note]; }),
+          [],["","","","TOTAL",totalTransferSuami,suamiEntries.filter(e=>e.type==="expense").reduce((s,e)=>s+e.amount,0),suamiSaldo,""]
+        ];
+        const ws2=X.utils.aoa_to_sheet(suamiData);
+        ws2["!cols"]=[{wch:5},{wch:12},{wch:22},{wch:30},{wch:16},{wch:16},{wch:16},{wch:20}];
+        X.utils.book_append_sheet(wb,ws2,"Kas Suami");
+
+        const istriData=[
+          ["No","Tanggal","Kategori","Deskripsi","Dana Masuk","Pengeluaran","Saldo Kas","Keterangan"],
+          ...istriLedger.map((e,i)=>{ const isIn=e.category==="Pindah Ke Istri"; return[i+1,e.date,e.category,e.desc,isIn?e.amount:"",!isIn?e.amount:"",e.running,e.note]; }),
+          [],["","","","TOTAL",totalTransferIstri,istriEntries.filter(e=>e.type==="expense").reduce((s,e)=>s+e.amount,0),istriSaldo,""]
+        ];
+        const ws3=X.utils.aoa_to_sheet(istriData);
+        ws3["!cols"]=[{wch:5},{wch:12},{wch:22},{wch:30},{wch:16},{wch:16},{wch:16},{wch:20}];
+        X.utils.book_append_sheet(wb,ws3,"Kas Istri");
+
+        const tE=EXPENSE_CATS.reduce((s,c)=>s+(estimates[c]||0),0);
+        const tR=EXPENSE_CATS.reduce((s,c)=>s+(catTotals[c]||0),0);
         const summaryData=[
-          ["RINGKASAN KEUANGAN KELUARGA"],
-          [],
-          ["Total Pendapatan","",totalIncome],
-          ["Total Pengeluaran","",totalExpense],
-          ["Total Transfer","",totalTransfer],
-          ["Saldo Kas Utama","",balance],
-          ["Saldo Kas Suami","",suamiSaldo],
-          ["Saldo Kas Istri","",istriSaldo],
-          ["Total Aset Keluarga","",balance+suamiSaldo+istriSaldo],
-          [],
+          ["RINGKASAN KEUANGAN KELUARGA"],[],
+          ["Total Pendapatan","",totalIncome],["Total Pengeluaran","",totalExpense],
+          ["Total Transfer","",totalTransfer],["Saldo Kas Utama","",balance],
+          ["Saldo Kas Suami","",suamiSaldo],["Saldo Kas Istri","",istriSaldo],
+          ["Total Aset Keluarga","",balance+suamiSaldo+istriSaldo],[],
           ["RINCIAN PER KATEGORI"],
           ["Kategori","Estimasi","Realisasi","% Realisasi","Selisih"],
-          ...EXPENSE_CATS.map(cat=>{
-            const est=estimates[cat]||0,real=catTotals[cat]||0;
-            return[cat,est,real,est>0?((real/est)*100).toFixed(1)+"%":"–",est-real];
-          }),
-          ["TOTAL",totalEst,totalReal,totalEst>0?((totalReal/totalEst)*100).toFixed(1)+"%":"–",totalEst-totalReal]
+          ...EXPENSE_CATS.map(cat=>{ const est=estimates[cat]||0,real=catTotals[cat]||0; return[cat,est,real,est>0?((real/est)*100).toFixed(1)+"%":"–",est-real]; }),
+          ["TOTAL",tE,tR,tE>0?((tR/tE)*100).toFixed(1)+"%":"–",tE-tR]
         ];
-        const ws2=X.utils.aoa_to_sheet(summaryData);
-        ws2["!cols"]=[{wch:30},{wch:16},{wch:16},{wch:14},{wch:16}];
-        X.utils.book_append_sheet(wb,ws2,"Ringkasan");
+        const ws4=X.utils.aoa_to_sheet(summaryData);
+        ws4["!cols"]=[{wch:30},{wch:16},{wch:16},{wch:14},{wch:16}];
+        X.utils.book_append_sheet(wb,ws4,"Ringkasan");
         X.writeFile(wb,"keuangan-keluarga.xlsx");
       };
 
@@ -260,7 +353,7 @@
 
       const tabs=[{id:"main",l:"📋 Utama"},{id:"suami",l:"👨 Suami"},{id:"istri",l:"👩 Istri"},{id:"summary",l:"📊 Ringkasan"}];
 
-      if (isLoading) return <div className="min-h-screen flex items-center justify-center text-gray-500 font-bold">Memuat Data Keuangan...</div>;
+      if(isLoading) return <div className="min-h-screen flex items-center justify-center text-gray-500 font-bold text-lg">⏳ Memuat Data Keuangan...</div>;
 
       return (
         <div className="min-h-screen bg-gray-50" style={{fontFamily:"system-ui,sans-serif"}}>
@@ -272,11 +365,13 @@
                   <span className="text-base font-bold text-gray-800">💰 KEUANGAN KELUARGA</span>
                   <span className="text-[10px] text-green-600 font-bold">☁️ CLOUD SYNC ACTIVE</span>
                 </div>
-                <div className="flex gap-1.5">
-                  <button onClick={()=>{setForm(EMPTY_FORM);setEditId(null);setShowForm(s=>!s);}} className="bg-green-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-green-700">{showForm?"✕":"＋ Tambah"}</button>
-                  <button onClick={exportXLSX} className="bg-emerald-600 text-white px-2.5 py-1.5 rounded-lg text-xs font-bold hover:bg-emerald-700">⬇ XLS</button>
-                  <button onClick={exportCSV} className="bg-blue-600 text-white px-2.5 py-1.5 rounded-lg text-xs font-bold hover:bg-blue-700">⬇ CSV</button>
-                  {entries.length>0&&<button onClick={clearAll} className="bg-red-400 text-white px-2.5 py-1.5 rounded-lg text-xs hover:bg-red-500">🗑</button>}
+                <div className="flex gap-1.5 flex-wrap">
+                  <button onClick={()=>{setForm(EMPTY_FORM);setEditId(null);setShowForm(s=>!s);}} className="no-print bg-green-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-green-700">{showForm?"✕":"＋ Tambah"}</button>
+                  <button onClick={handlePrint} className="no-print bg-gray-700 text-white px-2.5 py-1.5 rounded-lg text-xs font-bold hover:bg-gray-800">🖨 PDF</button>
+                  <button onClick={exportXLSX} className="no-print bg-emerald-600 text-white px-2.5 py-1.5 rounded-lg text-xs font-bold hover:bg-emerald-700">⬇ XLS</button>
+                  <button onClick={exportCSV} className="no-print bg-blue-600 text-white px-2.5 py-1.5 rounded-lg text-xs font-bold hover:bg-blue-700">⬇ CSV</button>
+                  {entries.length>0&&<button onClick={clearAll} className="no-print bg-red-400 text-white px-2.5 py-1.5 rounded-lg text-xs hover:bg-red-500">🗑</button>}
+                  <button onClick={handleLogout} title="Keluar" className="no-print bg-gray-200 text-gray-600 px-2.5 py-1.5 rounded-lg text-xs hover:bg-gray-300">🔒</button>
                 </div>
               </div>
               <div className="flex gap-2 overflow-x-auto pb-1" style={{scrollbarWidth:"none"}}>
@@ -368,11 +463,18 @@
                   <select value={filterCat} onChange={e=>setFilterCat(e.target.value)} className="border border-gray-300 rounded-lg px-2 py-1.5 text-xs flex-1 min-w-0">
                     <option value="Semua">Semua Kategori</option>{CATEGORIES.map(c=><option key={c}>{c}</option>)}
                   </select>
+                  <div className="flex items-center gap-1 flex-wrap">
+                    <span className="text-xs text-gray-500 shrink-0">📅 Dari</span>
+                    <input type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} className="border border-gray-300 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-green-500"/>
+                    <span className="text-xs text-gray-500 shrink-0">s/d</span>
+                    <input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} className="border border-gray-300 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-green-500"/>
+                    {(dateFrom||dateTo)&&<button onClick={()=>{setDateFrom("");setDateTo("");}} className="text-xs text-red-400 hover:text-red-600 shrink-0">✕ Reset</button>}
+                  </div>
                   <span className="text-xs text-gray-400 shrink-0">{filtered.length} entri</span>
                 </div>
                 {filtered.length===0?<EmptyState icon="📭" msg="Belum ada transaksi."/>
                   :isMobile
-                    ?<div>{runBalance.map(e=><TransactionCard key={e.id} e={e} running={e.running}/>)}</div>
+                    ?<div>{runBalance.map(e=><TransactionCard key={e.firebaseId} e={e} running={e.running}/>)}</div>
                     :(
                       <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
                         <div className="overflow-x-auto">
@@ -398,7 +500,7 @@
                                 const isT=e.type==="transfer",isI=e.type==="income";
                                 const bg=e.category==="Pindah Ke Suami"?"bg-blue-50":e.category==="Pindah Ke Istri"?"bg-pink-50":i%2===0?"bg-white":"bg-gray-50";
                                 return(
-                                  <tr key={e.id} className={`${bg} hover:bg-yellow-50 transition-colors`}>
+                                  <tr key={e.firebaseId} className={`${bg} hover:bg-yellow-50 transition-colors`}>
                                     <td className={tdCls+" text-gray-400 text-center"}>{i+1}</td>
                                     <td className={tdCls+" text-gray-600 whitespace-nowrap"}>{e.date}</td>
                                     <td className={tdCls}><span className={`px-1.5 py-0.5 rounded text-xs ${isT&&e.category==="Pindah Ke Suami"?"bg-blue-100 text-blue-700":isT&&e.category==="Pindah Ke Istri"?"bg-pink-100 text-pink-700":isI?"bg-green-100 text-green-700":"bg-orange-100 text-orange-700"}`}>{e.category}</span></td>
@@ -450,7 +552,7 @@
                 </div>
                 {suamiLedger.length===0?<EmptyState icon="👨" msg="Belum ada kas Suami. Tambahkan 'Pindah Ke Suami'."/>
                   :isMobile
-                    ?<div>{suamiLedger.map(e=><TransactionCard key={e.id} e={e} running={e.running} showEdit={false}/>)}</div>
+                    ?<div>{suamiLedger.map(e=><TransactionCard key={e.firebaseId} e={e} running={e.running} showEdit={false}/>)}</div>
                     :(
                       <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
                         <div className="overflow-x-auto">
@@ -461,7 +563,7 @@
                             </tr></thead>
                             <tbody>
                               {suamiLedger.map((e,i)=>{ const isIn=e.category==="Pindah Ke Suami"; return(
-                                <tr key={e.id} className={`${isIn?"bg-blue-50":i%2===0?"bg-white":"bg-orange-50"} hover:bg-yellow-50`}>
+                                <tr key={e.firebaseId} className={`${isIn?"bg-blue-50":i%2===0?"bg-white":"bg-orange-50"} hover:bg-yellow-50`}>
                                   <td className={tdCls+" text-gray-400 text-center"}>{i+1}</td>
                                   <td className={tdCls+" whitespace-nowrap text-gray-600"}>{e.date}</td>
                                   <td className={tdCls}><span className={`px-1.5 py-0.5 rounded text-xs ${isIn?"bg-blue-100 text-blue-700":"bg-orange-100 text-orange-700"}`}>{isIn?"↔ Transfer":e.category}</span></td>
@@ -500,7 +602,7 @@
                 </div>
                 {istriLedger.length===0?<EmptyState icon="👩" msg="Belum ada kas Istri. Tambahkan 'Pindah Ke Istri'."/>
                   :isMobile
-                    ?<div>{istriLedger.map(e=><TransactionCard key={e.id} e={e} running={e.running} showEdit={false}/>)}</div>
+                    ?<div>{istriLedger.map(e=><TransactionCard key={e.firebaseId} e={e} running={e.running} showEdit={false}/>)}</div>
                     :(
                       <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
                         <div className="overflow-x-auto">
@@ -511,7 +613,7 @@
                             </tr></thead>
                             <tbody>
                               {istriLedger.map((e,i)=>{ const isIn=e.category==="Pindah Ke Istri"; return(
-                                <tr key={e.id} className={`${isIn?"bg-pink-50":i%2===0?"bg-white":"bg-pink-50"} hover:bg-yellow-50`}>
+                                <tr key={e.firebaseId} className={`${isIn?"bg-pink-50":i%2===0?"bg-white":"bg-pink-50"} hover:bg-yellow-50`}>
                                   <td className={tdCls+" text-gray-400 text-center"}>{i+1}</td>
                                   <td className={tdCls+" whitespace-nowrap text-gray-600"}>{e.date}</td>
                                   <td className={tdCls}><span className={`px-1.5 py-0.5 rounded text-xs ${isIn?"bg-pink-100 text-pink-700":"bg-orange-100 text-orange-700"}`}>{isIn?"↔ Transfer":e.category}</span></td>
@@ -588,8 +690,8 @@
                                   <span className={real>0?"text-red-600 font-semibold":"text-gray-400"}>Realisasi: {real>0?fmt(real):"–"}</span>
                                 </div>
                                 {editingEst===cat&&<input type="number" autoFocus defaultValue={est}
-                                  onBlur={e=>updateEstimate(cat, e.target.value)}
-                                  onKeyDown={e=>{if(e.key==="Enter"){updateEstimate(cat, e.target.value);}}}
+                                  onBlur={e=>updateEstimate(cat,e.target.value)}
+                                  onKeyDown={e=>{if(e.key==="Enter")updateEstimate(cat,e.target.value);}}
                                   className="mt-2 w-full border border-blue-400 rounded-lg px-3 py-1.5 text-sm focus:outline-none"/>}
                                 {over&&<div className="text-red-500 text-xs mt-1">⚠️ Over {(pct-100).toFixed(0)}% dari estimasi!</div>}
                               </div>
@@ -623,8 +725,8 @@
                                     <td className={tdCls+" text-right"}>
                                       {editingEst===cat
                                         ?<input type="number" autoFocus defaultValue={est}
-                                            onBlur={e=>updateEstimate(cat, e.target.value)}
-                                            onKeyDown={e=>{if(e.key==="Enter"){updateEstimate(cat, e.target.value);}}}
+                                            onBlur={e=>updateEstimate(cat,e.target.value)}
+                                            onKeyDown={e=>{if(e.key==="Enter")updateEstimate(cat,e.target.value);}}
                                             className="w-28 border border-blue-400 rounded px-1 py-0.5 text-xs text-right focus:outline-none"/>
                                         :<button onClick={()=>setEditingEst(cat)} className="text-gray-600 hover:text-blue-600 hover:underline font-medium">{fmt(est)}</button>
                                       }
@@ -666,7 +768,7 @@
       );
     }
 
-    ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+    ReactDOM.createRoot(document.getElementById("root")).render(<Root/>);
   </script>
 </body>
 </html>
